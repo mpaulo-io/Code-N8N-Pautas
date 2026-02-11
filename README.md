@@ -74,3 +74,156 @@ or local n8n credentials.
   "CaptureDate": "YYYY-MM-DD",
   "ParseError": false
 }
+
+// =====================================================
+// ROBUST JSON PARSER FOR LLM OUTPUTS (PORTFOLIO SAFE)
+// =====================================================
+// Purpose:
+// - Safely extract and normalize JSON from LLM responses
+// - Handle malformed outputs, markdown blocks and noise
+// - Guarantee a stable schema for downstream automations
+// =====================================================
+
+// 1. SAFE OUTPUT CAPTURE
+let rawOutput = '';
+
+try {
+  const input = $input.item.json;
+
+  rawOutput =
+    input.output ||
+    input.text ||
+    input.response ||
+    '';
+
+  // If array, use first element
+  if (Array.isArray(rawOutput)) {
+    rawOutput = rawOutput[0];
+  }
+
+  // Convert objects to string
+  if (typeof rawOutput === 'object') {
+    rawOutput = JSON.stringify(rawOutput);
+  }
+
+  rawOutput = String(rawOutput).trim();
+
+  if (!rawOutput) {
+    throw new Error('Empty LLM output');
+  }
+
+} catch (error) {
+  console.error('Output capture failed:', error.message);
+  rawOutput = '{}';
+}
+
+// 2. AGGRESSIVE JSON CLEANER
+function cleanJSON(text) {
+  return text
+    .replace(/```(?:json)?/gi, '')          // Remove markdown fences
+    .replace(/```/g, '')
+    .replace(/^[^{]*(\{[\s\S]*\})[^}]*$/, '$1') // Extract JSON block
+    .replace(/[\r\n\t]+/g, ' ')             // Normalize whitespace
+    .replace(/,(\s*[}\]])/g, '$1')          // Remove trailing commas
+    .trim();
+}
+
+// 3. PARSE WITH FALLBACK STRATEGY
+let data;
+
+try {
+  const cleaned = cleanJSON(rawOutput);
+
+  if (!cleaned || cleaned === '{}') {
+    throw new Error('Invalid JSON after cleaning');
+  }
+
+  data = JSON.parse(cleaned);
+
+  // Required fields validation
+  if (!data.tema || !data.palavra_chave) {
+    throw new Error('Missing required fields');
+  }
+
+} catch (error) {
+  console.error('JSON parse failed:', {
+    error: error.message,
+    preview: rawOutput.slice(0, 120)
+  });
+
+  // Fallback evergreen content (safe default)
+  const fallbackPool = [
+    {
+      tema: 'How to Build Consistent Learning Habits',
+      palavra_chave: 'learning habits consistency',
+      persona: 'General',
+      categoria: 'Evergreen'
+    },
+    {
+      tema: 'Simple Daily Routines That Improve Focus',
+      palavra_chave: 'daily routines focus',
+      persona: 'Professionals',
+      categoria: 'Productivity'
+    },
+    {
+      tema: 'Why Systems Beat Motivation Over Time',
+      palavra_chave: 'systems vs motivation',
+      persona: 'Creators',
+      categoria: 'Mindset'
+    }
+  ];
+
+  data = fallbackPool[Math.floor(Math.random() * fallbackPool.length)];
+  data.isFallback = true;
+  data.parseError = true;
+}
+
+// 4. NORMALIZATION & SAFETY GUARDS
+const validPersonas = [
+  'General',
+  'Professionals',
+  'Creators',
+  'Students',
+  'Parents'
+];
+
+const validCategories = [
+  'Evergreen',
+  'Productivity',
+  'Mindset',
+  'Education',
+  'Lifestyle'
+];
+
+if (!validPersonas.includes(data.persona)) {
+  data.persona = 'General';
+}
+
+if (!validCategories.includes(data.categoria)) {
+  data.categoria = 'Evergreen';
+}
+
+// Keyword normalization
+data.palavra_chave = String(data.palavra_chave)
+  .toLowerCase()
+  .replace(/[^a-zà-ú0-9\s-]/gi, '')
+  .trim();
+
+// Title length safety
+if (data.tema.length > 80) {
+  data.tema = data.tema.slice(0, 77) + '...';
+}
+
+// 5. STANDARDIZED OUTPUT (DOWNSTREAM SAFE)
+return {
+  json: {
+    Tema: data.tema,
+    'Palavra-Chave': data.palavra_chave,
+    Categoria: data.categoria,
+    Persona: data.persona,
+    Status: 'Pending',
+    Source: data.isFallback ? 'Evergreen Fallback' : 'LLM Generated',
+    CaptureDate: new Date().toISOString().split('T')[0],
+    ParseError: data.parseError || false
+  }
+};
